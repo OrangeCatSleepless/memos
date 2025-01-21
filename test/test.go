@@ -3,7 +3,10 @@ package test
 import (
 	"fmt"
 	"net"
+	"os"
 	"testing"
+
+	"github.com/joho/godotenv"
 
 	"github.com/usememos/memos/server/profile"
 	"github.com/usememos/memos/server/version"
@@ -23,15 +26,33 @@ func getUnusedPort() int {
 }
 
 func GetTestingProfile(t *testing.T) *profile.Profile {
+	if err := godotenv.Load(".env"); err != nil {
+		t.Log("failed to load .env file, but it's ok")
+	}
+
 	// Get a temporary directory for the test data.
 	dir := t.TempDir()
-	mode := "dev"
+	mode := "prod"
 	port := getUnusedPort()
+	driver := getDriverFromEnv()
+	dsn := os.Getenv("DSN")
+	if driver == "sqlite" {
+		dsn = fmt.Sprintf("%s/memos_%s.db", dir, mode)
+	}
 	return &profile.Profile{
 		Mode:    mode,
 		Port:    port,
 		Data:    dir,
-		DSN:     fmt.Sprintf("%s/memos_%s.db", dir, mode),
+		DSN:     dsn,
+		Driver:  driver,
 		Version: version.GetCurrentVersion(mode),
 	}
+}
+
+func getDriverFromEnv() string {
+	driver := os.Getenv("DRIVER")
+	if driver == "" {
+		driver = "sqlite"
+	}
+	return driver
 }

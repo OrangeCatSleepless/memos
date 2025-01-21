@@ -1,56 +1,49 @@
+import { LinkIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useMemoCacheStore } from "@/store/v1";
-import Icon from "../Icon";
+import { useMemoStore } from "@/store/v1";
+import { MemoRelation, MemoRelation_Type } from "@/types/proto/api/v1/memo_relation_service";
+import { Memo } from "@/types/proto/api/v1/memo_service";
 
 interface Props {
   relationList: MemoRelation[];
   setRelationList: (relationList: MemoRelation[]) => void;
 }
 
-interface FormatedMemoRelation extends MemoRelation {
-  relatedMemo: Memo;
-}
-
 const RelationListView = (props: Props) => {
   const { relationList, setRelationList } = props;
-  const memoCacheStore = useMemoCacheStore();
-  const [formatedMemoRelationList, setFormatedMemoRelationList] = useState<FormatedMemoRelation[]>([]);
+  const memoStore = useMemoStore();
+  const [referencingMemoList, setReferencingMemoList] = useState<Memo[]>([]);
 
   useEffect(() => {
-    const fetchRelatedMemoList = async () => {
-      const requests = relationList.map(async (relation) => {
-        const relatedMemo = await memoCacheStore.getOrFetchMemoById(relation.relatedMemoId);
-        return {
-          ...relation,
-          relatedMemo,
-        };
-      });
+    (async () => {
+      const requests = relationList
+        .filter((relation) => relation.type === MemoRelation_Type.REFERENCE)
+        .map(async (relation) => {
+          return await memoStore.getOrFetchMemoByName(relation.relatedMemo!.name, { skipStore: true });
+        });
       const list = await Promise.all(requests);
-      setFormatedMemoRelationList(list);
-    };
-    fetchRelatedMemoList();
+      setReferencingMemoList(list);
+    })();
   }, [relationList]);
 
-  const handleDeleteRelation = async (memoRelation: FormatedMemoRelation) => {
-    const newRelationList = relationList.filter((relation) => relation.relatedMemoId !== memoRelation.relatedMemoId);
-    setRelationList(newRelationList);
+  const handleDeleteRelation = async (memo: Memo) => {
+    setRelationList(relationList.filter((relation) => relation.relatedMemo?.name !== memo.name));
   };
 
   return (
     <>
-      {formatedMemoRelationList.length > 0 && (
+      {referencingMemoList.length > 0 && (
         <div className="w-full flex flex-row gap-2 mt-2 flex-wrap">
-          {formatedMemoRelationList.map((memoRelation) => {
+          {referencingMemoList.map((memo) => {
             return (
               <div
-                key={memoRelation.relatedMemoId}
-                className="w-auto max-w-[50%] overflow-hidden flex flex-row justify-start items-center bg-gray-100 dark:bg-zinc-800 hover:opacity-80 rounded text-sm p-1 px-2 text-gray-500 cursor-pointer"
+                key={memo.name}
+                className="w-auto max-w-xs overflow-hidden flex flex-row justify-start items-center bg-zinc-100 dark:bg-zinc-900 hover:opacity-80 rounded-md text-sm p-1 px-2 text-gray-500 dark:text-gray-400 cursor-pointer hover:line-through"
+                onClick={() => handleDeleteRelation(memo)}
               >
-                <Icon.Link className="w-4 h-auto shrink-0" />
-                <span className="mx-1 max-w-full text-ellipsis font-mono whitespace-nowrap overflow-hidden">
-                  {memoRelation.relatedMemo.content}
-                </span>
-                <Icon.X className="w-4 h-auto hover:opacity-80 shrink-0" onClick={() => handleDeleteRelation(memoRelation)} />
+                <LinkIcon className="w-4 h-auto shrink-0 opacity-80" />
+                <span className="mx-1 max-w-full text-ellipsis whitespace-nowrap overflow-hidden">{memo.snippet}</span>
+                <XIcon className="w-4 h-auto cursor-pointer shrink-0 opacity-60 hover:opacity-100" />
               </div>
             );
           })}

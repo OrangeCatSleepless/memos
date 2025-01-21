@@ -1,4 +1,4 @@
-import classNames from "classnames";
+import clsx from "clsx";
 
 interface Props {
   avatarUrl?: string;
@@ -8,8 +8,14 @@ interface Props {
 const UserAvatar = (props: Props) => {
   const { avatarUrl, className } = props;
   return (
-    <div className={classNames(`w-8 h-8 overflow-clip`, className)}>
-      <img className="w-full h-auto rounded-full min-w-full min-h-full object-cover" src={avatarUrl || "/logo.webp"} alt="" />
+    <div className={clsx(`w-8 h-8 overflow-clip rounded-xl`, className)}>
+      <img
+        className="w-full h-auto shadow min-w-full min-h-full object-cover dark:opacity-80"
+        src={avatarUrl || "/full-logo.webp"}
+        decoding="async"
+        loading="lazy"
+        alt=""
+      />
     </div>
   );
 };

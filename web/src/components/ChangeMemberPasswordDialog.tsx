@@ -1,8 +1,10 @@
+import { Button, Input } from "@usememos/mui";
+import { XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
+import { useUserStore } from "@/store/v1";
+import { User } from "@/types/proto/api/v1/user_service";
 import { useTranslate } from "@/utils/i18n";
-import { useUserStore } from "@/store/module";
-import Icon from "./Icon";
 import { generateDialog } from "./Dialog";
 
 interface Props extends DialogProps {
@@ -10,7 +12,7 @@ interface Props extends DialogProps {
 }
 
 const ChangeMemberPasswordDialog: React.FC<Props> = (props: Props) => {
-  const { user: propsUser, destroy } = props;
+  const { user, destroy } = props;
   const t = useTranslate();
   const userStore = useUserStore();
   const [newPassword, setNewPassword] = useState("");
@@ -47,15 +49,18 @@ const ChangeMemberPasswordDialog: React.FC<Props> = (props: Props) => {
     }
 
     try {
-      await userStore.patchUser({
-        id: propsUser.id,
-        password: newPassword,
-      });
+      await userStore.updateUser(
+        {
+          name: user.name,
+          password: newPassword,
+        },
+        ["password"],
+      );
       toast(t("message.password-changed"));
       handleCloseBtnClick();
     } catch (error: any) {
       console.error(error);
-      toast.error(error.response.data.message);
+      toast.error(error.details);
     }
   };
 
@@ -63,36 +68,36 @@ const ChangeMemberPasswordDialog: React.FC<Props> = (props: Props) => {
     <>
       <div className="dialog-header-container !w-64">
         <p className="title-text">
-          {t("setting.account-section.change-password")} ({propsUser.username})
+          {t("setting.account-section.change-password")} ({user.nickname})
         </p>
-        <button className="btn close-btn" onClick={handleCloseBtnClick}>
-          <Icon.X />
-        </button>
+        <Button size="sm" variant="plain" onClick={handleCloseBtnClick}>
+          <XIcon className="w-5 h-auto" />
+        </Button>
       </div>
       <div className="dialog-content-container">
         <p className="text-sm mb-1">{t("auth.new-password")}</p>
-        <input
+        <Input
+          className="w-full"
           type="password"
-          className="input-text"
           placeholder={t("auth.new-password")}
           value={newPassword}
           onChange={handleNewPasswordChanged}
         />
         <p className="text-sm mb-1 mt-2">{t("auth.repeat-new-password")}</p>
-        <input
+        <Input
+          className="w-full"
           type="password"
-          className="input-text"
           placeholder={t("auth.repeat-new-password")}
           value={newPasswordAgain}
           onChange={handleNewPasswordAgainChanged}
         />
-        <div className="mt-4 w-full flex flex-row justify-end items-center space-x-2">
-          <span className="btn-text" onClick={handleCloseBtnClick}>
+        <div className="flex flex-row justify-end items-center mt-4 w-full gap-x-2">
+          <Button variant="plain" onClick={handleCloseBtnClick}>
             {t("common.cancel")}
-          </span>
-          <span className="btn-primary" onClick={handleSaveBtnClick}>
+          </Button>
+          <Button color="primary" onClick={handleSaveBtnClick}>
             {t("common.save")}
-          </span>
+          </Button>
         </div>
       </div>
     </>
@@ -106,7 +111,7 @@ function showChangeMemberPasswordDialog(user: User) {
       dialogName: "change-member-password-dialog",
     },
     ChangeMemberPasswordDialog,
-    { user }
+    { user },
   );
 }
 

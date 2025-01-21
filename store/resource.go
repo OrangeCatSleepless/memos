@@ -2,154 +2,79 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"strings"
+	"log/slog"
+	"os"
+	"path/filepath"
+
+	"github.com/pkg/errors"
+
+	"github.com/usememos/memos/internal/util"
+	"github.com/usememos/memos/plugin/storage/s3"
+	storepb "github.com/usememos/memos/proto/gen/store"
 )
 
 type Resource struct {
-	ID int
+	// ID is the system generated unique identifier for the resource.
+	ID int32
+	// UID is the user defined unique identifier for the resource.
+	UID string
 
 	// Standard fields
-	CreatorID int
+	CreatorID int32
 	CreatedTs int64
 	UpdatedTs int64
 
 	// Domain specific fields
-	Filename         string
-	Blob             []byte
-	InternalPath     string
-	ExternalLink     string
-	Type             string
-	Size             int64
-	LinkedMemoAmount int
+	Filename    string
+	Blob        []byte
+	Type        string
+	Size        int64
+	StorageType storepb.ResourceStorageType
+	Reference   string
+	Payload     *storepb.ResourcePayload
+
+	// The related memo ID.
+	MemoID *int32
 }
 
 type FindResource struct {
-	GetBlob   bool
-	ID        *int
-	CreatorID *int
-	Filename  *string
-	MemoID    *int
-	Limit     *int
-	Offset    *int
+	GetBlob        bool
+	ID             *int32
+	UID            *string
+	CreatorID      *int32
+	Filename       *string
+	FilenameSearch *string
+	MemoID         *int32
+	HasRelatedMemo bool
+	StorageType    *storepb.ResourceStorageType
+	Limit          *int
+	Offset         *int
 }
 
 type UpdateResource struct {
-	ID        int
+	ID        int32
+	UID       *string
 	UpdatedTs *int64
 	Filename  *string
+	MemoID    *int32
+	Reference *string
+	Payload   *storepb.ResourcePayload
 }
 
 type DeleteResource struct {
-	ID int
+	ID     int32
+	MemoID *int32
 }
 
 func (s *Store) CreateResource(ctx context.Context, create *Resource) (*Resource, error) {
-	stmt := `
-		INSERT INTO resource (
-			filename,
-			blob,
-			external_link,
-			type,
-			size,
-			creator_id,
-			internal_path
-		)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-		RETURNING id, created_ts, updated_ts
-	`
-	if err := s.db.QueryRowContext(
-		ctx,
-		stmt,
-		create.Filename,
-		create.Blob,
-		create.ExternalLink,
-		create.Type,
-		create.Size,
-		create.CreatorID,
-		create.InternalPath,
-	).Scan(&create.ID, &create.CreatedTs, &create.UpdatedTs); err != nil {
-		return nil, err
+	if !util.UIDMatcher.MatchString(create.UID) {
+		return nil, errors.New("invalid uid")
 	}
-
-	resource := create
-	return resource, nil
+	return s.driver.CreateResource(ctx, create)
 }
 
 func (s *Store) ListResources(ctx context.Context, find *FindResource) ([]*Resource, error) {
-	where, args := []string{"1 = 1"}, []any{}
-
-	if v := find.ID; v != nil {
-		where, args = append(where, "resource.id = ?"), append(args, *v)
-	}
-	if v := find.CreatorID; v != nil {
-		where, args = append(where, "resource.creator_id = ?"), append(args, *v)
-	}
-	if v := find.Filename; v != nil {
-		where, args = append(where, "resource.filename = ?"), append(args, *v)
-	}
-	if v := find.MemoID; v != nil {
-		where, args = append(where, "resource.id in (SELECT resource_id FROM memo_resource WHERE memo_id = ?)"), append(args, *v)
-	}
-
-	fields := []string{"resource.id", "resource.filename", "resource.external_link", "resource.type", "resource.size", "resource.creator_id", "resource.created_ts", "resource.updated_ts", "internal_path"}
-	if find.GetBlob {
-		fields = append(fields, "resource.blob")
-	}
-
-	query := fmt.Sprintf(`
-		SELECT
-		  COUNT(DISTINCT memo_resource.memo_id) AS linked_memo_amount,
-			%s
-		FROM resource
-		LEFT JOIN memo_resource ON resource.id = memo_resource.resource_id
-		WHERE %s
-		GROUP BY resource.id
-		ORDER BY resource.id DESC
-	`, strings.Join(fields, ", "), strings.Join(where, " AND "))
-	if find.Limit != nil {
-		query = fmt.Sprintf("%s LIMIT %d", query, *find.Limit)
-		if find.Offset != nil {
-			query = fmt.Sprintf("%s OFFSET %d", query, *find.Offset)
-		}
-	}
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	list := make([]*Resource, 0)
-	for rows.Next() {
-		resource := Resource{}
-		dests := []any{
-			&resource.LinkedMemoAmount,
-			&resource.ID,
-			&resource.Filename,
-			&resource.ExternalLink,
-			&resource.Type,
-			&resource.Size,
-			&resource.CreatorID,
-			&resource.CreatedTs,
-			&resource.UpdatedTs,
-			&resource.InternalPath,
-		}
-		if find.GetBlob {
-			dests = append(dests, &resource.Blob)
-		}
-		if err := rows.Scan(dests...); err != nil {
-			return nil, err
-		}
-		list = append(list, &resource)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	return list, nil
+	return s.driver.ListResources(ctx, find)
 }
 
 func (s *Store) GetResource(ctx context.Context, find *FindResource) (*Resource, error) {
@@ -165,76 +90,66 @@ func (s *Store) GetResource(ctx context.Context, find *FindResource) (*Resource,
 	return resources[0], nil
 }
 
-func (s *Store) UpdateResource(ctx context.Context, update *UpdateResource) (*Resource, error) {
-	set, args := []string{}, []any{}
-
-	if v := update.UpdatedTs; v != nil {
-		set, args = append(set, "updated_ts = ?"), append(args, *v)
+func (s *Store) UpdateResource(ctx context.Context, update *UpdateResource) error {
+	if update.UID != nil && !util.UIDMatcher.MatchString(*update.UID) {
+		return errors.New("invalid uid")
 	}
-	if v := update.Filename; v != nil {
-		set, args = append(set, "filename = ?"), append(args, *v)
-	}
-
-	args = append(args, update.ID)
-	fields := []string{"id", "filename", "external_link", "type", "size", "creator_id", "created_ts", "updated_ts", "internal_path"}
-	stmt := `
-		UPDATE resource
-		SET ` + strings.Join(set, ", ") + `
-		WHERE id = ?
-		RETURNING ` + strings.Join(fields, ", ")
-	resource := Resource{}
-	dests := []any{
-		&resource.ID,
-		&resource.Filename,
-		&resource.ExternalLink,
-		&resource.Type,
-		&resource.Size,
-		&resource.CreatorID,
-		&resource.CreatedTs,
-		&resource.UpdatedTs,
-		&resource.InternalPath,
-	}
-	if err := s.db.QueryRowContext(ctx, stmt, args...).Scan(dests...); err != nil {
-		return nil, err
-	}
-
-	return &resource, nil
+	return s.driver.UpdateResource(ctx, update)
 }
 
 func (s *Store) DeleteResource(ctx context.Context, delete *DeleteResource) error {
-	stmt := `
-		DELETE FROM resource
-		WHERE id = ?
-	`
-	result, err := s.db.ExecContext(ctx, stmt, delete.ID)
+	resource, err := s.GetResource(ctx, &FindResource{ID: &delete.ID})
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get resource")
 	}
-	if _, err := result.RowsAffected(); err != nil {
-		return err
-	}
-	if err := s.Vacuum(ctx); err != nil {
-		// Prevent linter warning.
-		return err
-	}
-	return nil
-}
-
-func vacuumResource(ctx context.Context, tx *sql.Tx) error {
-	stmt := `
-	DELETE FROM 
-		resource 
-	WHERE 
-		creator_id NOT IN (
-			SELECT 
-				id 
-			FROM 
-				user
-		)`
-	_, err := tx.ExecContext(ctx, stmt)
-	if err != nil {
-		return err
+	if resource == nil {
+		return errors.Wrap(nil, "resource not found")
 	}
 
-	return nil
+	if resource.StorageType == storepb.ResourceStorageType_LOCAL {
+		if err := func() error {
+			p := filepath.FromSlash(resource.Reference)
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(s.Profile.Data, p)
+			}
+			err := os.Remove(p)
+			if err != nil {
+				return errors.Wrap(err, "failed to delete local file")
+			}
+			return nil
+		}(); err != nil {
+			return errors.Wrap(err, "failed to delete local file")
+		}
+	} else if resource.StorageType == storepb.ResourceStorageType_S3 {
+		if err := func() error {
+			s3ObjectPayload := resource.Payload.GetS3Object()
+			if s3ObjectPayload == nil {
+				return errors.Errorf("No s3 object found")
+			}
+			workspaceStorageSetting, err := s.GetWorkspaceStorageSetting(ctx)
+			if err != nil {
+				return errors.Wrap(err, "failed to get workspace storage setting")
+			}
+			s3Config := s3ObjectPayload.S3Config
+			if s3Config == nil {
+				if workspaceStorageSetting.S3Config == nil {
+					return errors.Errorf("S3 config is not found")
+				}
+				s3Config = workspaceStorageSetting.S3Config
+			}
+
+			s3Client, err := s3.NewClient(ctx, s3Config)
+			if err != nil {
+				return errors.Wrap(err, "Failed to create s3 client")
+			}
+			if err := s3Client.DeleteObject(ctx, s3ObjectPayload.Key); err != nil {
+				return errors.Wrap(err, "Failed to delete s3 object")
+			}
+			return nil
+		}(); err != nil {
+			slog.Warn("Failed to delete s3 object", slog.Any("err", err))
+		}
+	}
+
+	return s.driver.DeleteResource(ctx, delete)
 }

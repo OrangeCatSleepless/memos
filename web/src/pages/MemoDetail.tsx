@@ -1,66 +1,179 @@
-import { useEffect } from "react";
+import { Button } from "@usememos/mui";
+import clsx from "clsx";
+import { ArrowUpLeftFromCircleIcon, MessageCircleIcon } from "lucide-react";
+import { ClientError } from "nice-grpc-web";
+import { useEffect, useState } from "react";
 import { toast } from "react-hot-toast";
-import { useTranslate } from "@/utils/i18n";
 import { Link, useLocation, useParams } from "react-router-dom";
-import { useGlobalStore, useMemoStore } from "@/store/module";
-import useLoading from "@/hooks/useLoading";
-import Icon from "@/components/Icon";
-import Memo from "@/components/Memo";
+import { MemoDetailSidebar, MemoDetailSidebarDrawer } from "@/components/MemoDetailSidebar";
+import MemoEditor from "@/components/MemoEditor";
+import MemoView from "@/components/MemoView";
+import MobileHeader from "@/components/MobileHeader";
+import useCurrentUser from "@/hooks/useCurrentUser";
+import useNavigateTo from "@/hooks/useNavigateTo";
+import useResponsiveWidth from "@/hooks/useResponsiveWidth";
+import { useMemoStore, useWorkspaceSettingStore } from "@/store/v1";
+import { MemoRelation_Type } from "@/types/proto/api/v1/memo_relation_service";
+import { Memo } from "@/types/proto/api/v1/memo_service";
+import { WorkspaceMemoRelatedSetting, WorkspaceSettingKey } from "@/types/proto/store/workspace_setting";
+import { useTranslate } from "@/utils/i18n";
 
 const MemoDetail = () => {
   const t = useTranslate();
+  const { md } = useResponsiveWidth();
   const params = useParams();
-  const location = useLocation();
-  const globalStore = useGlobalStore();
+  const navigateTo = useNavigateTo();
+  const { state: locationState } = useLocation();
+  const workspaceSettingStore = useWorkspaceSettingStore();
+  const currentUser = useCurrentUser();
   const memoStore = useMemoStore();
-  const loadingState = useLoading();
-  const customizedProfile = globalStore.state.systemStatus.customizedProfile;
-  const memoId = Number(params.memoId);
-  const memo = memoStore.state.memos.find((memo) => memo.id === memoId);
+  const uid = params.uid;
+  const memo = memoStore.getMemoByUid(uid || "");
+  const workspaceMemoRelatedSetting = WorkspaceMemoRelatedSetting.fromPartial(
+    workspaceSettingStore.getWorkspaceSettingByKey(WorkspaceSettingKey.MEMO_RELATED)?.memoRelatedSetting || {},
+  );
+  const [parentMemo, setParentMemo] = useState<Memo | undefined>(undefined);
+  const [showCommentEditor, setShowCommentEditor] = useState(false);
+  const commentRelations =
+    memo?.relations.filter((relation) => relation.relatedMemo?.name === memo.name && relation.type === MemoRelation_Type.COMMENT) || [];
+  const comments = commentRelations.map((relation) => memoStore.getMemoByName(relation.memo!.name)).filter((memo) => memo) as any as Memo[];
+  const showCreateCommentButton = workspaceMemoRelatedSetting.enableComment && currentUser && !showCommentEditor;
 
+  // Prepare memo.
   useEffect(() => {
-    if (memoId && !isNaN(memoId)) {
-      memoStore
-        .fetchMemoById(memoId)
-        .then(() => {
-          loadingState.setFinish();
-        })
-        .catch((error) => {
-          console.error(error);
-          toast.error(error.response.data.message);
-        });
+    if (uid) {
+      memoStore.fetchMemoByUid(uid).catch((error: ClientError) => {
+        toast.error(error.details);
+        navigateTo("/403");
+      });
+    } else {
+      navigateTo("/404");
     }
-  }, [location]);
+  }, [uid]);
+
+  // Prepare memo comments.
+  useEffect(() => {
+    if (!memo) {
+      return;
+    }
+
+    (async () => {
+      if (memo.parent) {
+        memoStore.getOrFetchMemoByName(memo.parent).then((memo: Memo) => {
+          setParentMemo(memo);
+        });
+      } else {
+        setParentMemo(undefined);
+      }
+      await Promise.all(commentRelations.map((relation) => memoStore.getOrFetchMemoByName(relation.memo!.name)));
+    })();
+  }, [memo]);
+
+  if (!memo) {
+    return null;
+  }
+
+  const handleShowCommentEditor = () => {
+    setShowCommentEditor(true);
+  };
+
+  const handleCommentCreated = async (memoCommentName: string) => {
+    await memoStore.getOrFetchMemoByName(memoCommentName);
+    await memoStore.getOrFetchMemoByName(memo.name, { skipCache: true });
+    setShowCommentEditor(false);
+  };
 
   return (
-    <section className="relative top-0 w-full h-full overflow-y-auto overflow-x-hidden bg-zinc-100 dark:bg-zinc-800">
-      <div className="relative w-full min-h-full mx-auto flex flex-col justify-start items-center pb-6">
-        <div className="max-w-2xl w-full flex flex-row justify-center items-center px-4 py-2 mt-2 bg-zinc-100 dark:bg-zinc-800">
-          <div className="detail-header flex flex-row justify-start items-center">
-            <img className="detail-logo h-10 w-auto rounded-lg mr-2" src={customizedProfile.logoUrl} alt="" />
-            <p className="detail-name text-4xl tracking-wide text-black dark:text-white">{customizedProfile.name}</p>
+    <section className="@container w-full max-w-5xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
+      {!md && (
+        <MobileHeader>
+          <MemoDetailSidebarDrawer memo={memo} parentPage={locationState?.from} />
+        </MobileHeader>
+      )}
+      <div className={clsx("w-full flex flex-row justify-start items-start px-4 sm:px-6 gap-4")}>
+        <div className={clsx(md ? "w-[calc(100%-15rem)]" : "w-full")}>
+          {parentMemo && (
+            <div className="w-auto inline-block mb-2">
+              <Link
+                className="px-3 py-1 border rounded-lg max-w-xs w-auto text-sm flex flex-row justify-start items-center flex-nowrap text-gray-600 dark:text-gray-400 dark:border-gray-500 hover:shadow hover:opacity-80"
+                to={`/m/${parentMemo.uid}`}
+                state={locationState}
+                viewTransition
+              >
+                <ArrowUpLeftFromCircleIcon className="w-4 h-auto shrink-0 opacity-60 mr-2" />
+                <span className="truncate">{parentMemo.content}</span>
+              </Link>
+            </div>
+          )}
+          <MemoView
+            key={`${memo.name}-${memo.displayTime}`}
+            className="shadow hover:shadow-md transition-all"
+            memo={memo}
+            compact={false}
+            parentPage={locationState?.from}
+            showCreator
+            showVisibility
+            showPinned
+          />
+          <div className="pt-8 pb-16 w-full">
+            <h2 id="comments" className="sr-only">
+              {t("memo.comment.self")}
+            </h2>
+            <div className="relative mx-auto flex-grow w-full min-h-full flex flex-col justify-start items-start gap-y-1">
+              {comments.length === 0 ? (
+                showCreateCommentButton && (
+                  <div className="w-full flex flex-row justify-center items-center py-6">
+                    <Button variant="plain" color="primary" onClick={handleShowCommentEditor}>
+                      <span className="text-gray-500">{t("memo.comment.write-a-comment")}</span>
+                      <MessageCircleIcon className="ml-2 w-5 h-auto text-gray-500" />
+                    </Button>
+                  </div>
+                )
+              ) : (
+                <>
+                  <div className="w-full flex flex-row justify-between items-center h-8 pl-3 mb-2">
+                    <div className="flex flex-row justify-start items-center">
+                      <MessageCircleIcon className="w-5 h-auto text-gray-400 mr-1" />
+                      <span className="text-gray-400 text-sm">{t("memo.comment.self")}</span>
+                      <span className="text-gray-400 text-sm ml-1">({comments.length})</span>
+                    </div>
+                    {showCreateCommentButton && (
+                      <Button variant="plain" color="primary" className="text-gray-500" onClick={handleShowCommentEditor}>
+                        {t("memo.comment.write-a-comment")}
+                      </Button>
+                    )}
+                  </div>
+                  {comments.map((comment) => (
+                    <MemoView
+                      key={`${comment.name}-${comment.displayTime}`}
+                      memo={comment}
+                      parentPage={locationState?.from}
+                      showCreator
+                      compact
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+            {showCommentEditor && (
+              <div className="w-full">
+                <MemoEditor
+                  cacheKey={`${memo.name}-${memo.updateTime}-comment`}
+                  placeholder={t("editor.add-your-comment-here")}
+                  parentMemoName={memo.name}
+                  autoFocus
+                  onConfirm={handleCommentCreated}
+                  onCancel={() => setShowCommentEditor(false)}
+                />
+              </div>
+            )}
           </div>
         </div>
-        {!loadingState.isLoading &&
-          (memo ? (
-            <>
-              <main className="relative flex-grow max-w-2xl w-full min-h-full flex flex-col justify-start items-start px-4">
-                <Memo memo={memo} showCreator showFull showRelatedMemos />
-              </main>
-              <div className="mt-4 w-full flex flex-row justify-center items-center gap-2">
-                <Link
-                  to="/"
-                  className="flex flex-row justify-center items-center text-gray-600 dark:text-gray-300 text-sm px-3 hover:opacity-80 hover:underline"
-                >
-                  <Icon.Home className="w-4 h-auto mr-1 -mt-0.5" /> {t("router.back-to-home")}
-                </Link>
-              </div>
-            </>
-          ) : (
-            <>
-              <p>Not found</p>
-            </>
-          ))}
+        {md && (
+          <div className="sticky top-0 left-0 shrink-0 -mt-6 w-56 h-full">
+            <MemoDetailSidebar className="py-6" memo={memo} parentPage={locationState?.from} />
+          </div>
+        )}
       </div>
     </section>
   );

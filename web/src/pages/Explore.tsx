@@ -1,121 +1,89 @@
-import { useEffect, useState } from "react";
-import { toast } from "react-hot-toast";
-import { useTranslate } from "@/utils/i18n";
-import { useLocation } from "react-router-dom";
-import { useFilterStore, useGlobalStore, useMemoStore } from "@/store/module";
-import { TAG_REG } from "@/labs/marked/parser";
-import { DEFAULT_MEMO_LIMIT } from "@/helpers/consts";
-import useLoading from "@/hooks/useLoading";
-import MemoFilter from "@/components/MemoFilter";
-import Memo from "@/components/Memo";
+import clsx from "clsx";
+import dayjs from "dayjs";
+import { useMemo } from "react";
+import { ExploreSidebar, ExploreSidebarDrawer } from "@/components/ExploreSidebar";
+import MemoFilters from "@/components/MemoFilters";
+import MemoView from "@/components/MemoView";
 import MobileHeader from "@/components/MobileHeader";
-import Empty from "@/components/Empty";
-import SearchBar from "@/components/SearchBar";
+import PagedMemoList from "@/components/PagedMemoList";
+import useCurrentUser from "@/hooks/useCurrentUser";
+import useResponsiveWidth from "@/hooks/useResponsiveWidth";
+import { useMemoFilterStore } from "@/store/v1";
+import { State } from "@/types/proto/api/v1/common";
+import { Memo } from "@/types/proto/api/v1/memo_service";
 
 const Explore = () => {
-  const t = useTranslate();
-  const location = useLocation();
-  const globalStore = useGlobalStore();
-  const filterStore = useFilterStore();
-  const memoStore = useMemoStore();
-  const filter = filterStore.state;
-  const { memos } = memoStore.state;
-  const [isComplete, setIsComplete] = useState<boolean>(false);
-  const loadingState = useLoading();
+  const { md } = useResponsiveWidth();
+  const user = useCurrentUser();
+  const memoFilterStore = useMemoFilterStore();
 
-  const { tag: tagQuery, text: textQuery } = filter;
-  const showMemoFilter = Boolean(tagQuery || textQuery);
-
-  const fetchedMemos = showMemoFilter
-    ? memos.filter((memo) => {
-        let shouldShow = true;
-
-        if (tagQuery) {
-          const tagsSet = new Set<string>();
-          for (const t of Array.from(memo.content.match(new RegExp(TAG_REG, "g")) ?? [])) {
-            const tag = t.replace(TAG_REG, "$1").trim();
-            const items = tag.split("/");
-            let temp = "";
-            for (const i of items) {
-              temp += i;
-              tagsSet.add(temp);
-              temp += "/";
-            }
-          }
-          if (!tagsSet.has(tagQuery)) {
-            shouldShow = false;
-          }
-        }
-
-        if (textQuery && !memo.content.toLowerCase().includes(textQuery.toLowerCase())) {
-          shouldShow = false;
-        }
-
-        return shouldShow;
-      })
-    : memos;
-
-  const sortedMemos = fetchedMemos
-    .filter((m) => m.rowStatus === "NORMAL" && m.visibility !== "PRIVATE")
-    .sort((mi, mj) => mj.displayTs - mi.displayTs);
-
-  useEffect(() => {
-    memoStore
-      .fetchAllMemos(DEFAULT_MEMO_LIMIT, 0)
-      .then((fetchedMemos) => {
-        if (fetchedMemos.length < DEFAULT_MEMO_LIMIT) {
-          setIsComplete(true);
-        }
-        loadingState.setFinish();
-      })
-      .catch((error) => {
-        console.error(error);
-        toast.error(error.response.data.message);
-      });
-  }, [location]);
-
-  const handleFetchMoreClick = async () => {
-    try {
-      const fetchedMemos = await memoStore.fetchAllMemos(DEFAULT_MEMO_LIMIT, memos.length);
-      if (fetchedMemos.length < DEFAULT_MEMO_LIMIT) {
-        setIsComplete(true);
-      } else {
-        setIsComplete(false);
+  const memoListFilter = useMemo(() => {
+    const filters = [`state == "NORMAL"`, `visibilities == [${user ? "'PUBLIC', 'PROTECTED'" : "'PUBLIC'"}]`];
+    const contentSearch: string[] = [];
+    const tagSearch: string[] = [];
+    for (const filter of memoFilterStore.filters) {
+      if (filter.factor === "contentSearch") {
+        contentSearch.push(`"${filter.value}"`);
+      } else if (filter.factor === "tagSearch") {
+        tagSearch.push(`"${filter.value}"`);
+      } else if (filter.factor === "property.hasLink") {
+        filters.push(`has_link == true`);
+      } else if (filter.factor === "property.hasTaskList") {
+        filters.push(`has_task_list == true`);
+      } else if (filter.factor === "property.hasCode") {
+        filters.push(`has_code == true`);
+      } else if (filter.factor === "displayTime") {
+        const filterDate = new Date(filter.value);
+        const filterUtcTimestamp = filterDate.getTime() + filterDate.getTimezoneOffset() * 60 * 1000;
+        const timestampAfter = filterUtcTimestamp / 1000;
+        filters.push(`display_time_after == ${timestampAfter}`);
+        filters.push(`display_time_before == ${timestampAfter + 60 * 60 * 24}`);
       }
-    } catch (error: any) {
-      console.error(error);
-      toast.error(error.response.data.message);
     }
-  };
+    if (memoFilterStore.orderByTimeAsc) {
+      filters.push(`order_by_time_asc == true`);
+    }
+    if (contentSearch.length > 0) {
+      filters.push(`content_search == [${contentSearch.join(", ")}]`);
+    }
+    if (tagSearch.length > 0) {
+      filters.push(`tag_search == [${tagSearch.join(", ")}]`);
+    }
+    return filters.join(" && ");
+  }, [user, memoFilterStore.filters, memoFilterStore.orderByTimeAsc]);
 
   return (
-    <section className="w-full max-w-3xl min-h-full flex flex-col justify-start items-center px-4 sm:px-2 sm:pt-4 pb-8 bg-zinc-100 dark:bg-zinc-800">
-      <MobileHeader showSearch={false} />
-      {globalStore.isDev() && (
-        <div className="mb-4 mt-2 w-full">
-          <SearchBar />
+    <section className="@container w-full max-w-5xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
+      {!md && (
+        <MobileHeader>
+          <ExploreSidebarDrawer />
+        </MobileHeader>
+      )}
+      <div className={clsx("w-full flex flex-row justify-start items-start px-4 sm:px-6 gap-4")}>
+        <div className={clsx(md ? "w-[calc(100%-15rem)]" : "w-full")}>
+          <MemoFilters />
+          <div className="flex flex-col justify-start items-start w-full max-w-full">
+            <PagedMemoList
+              renderer={(memo: Memo) => <MemoView key={`${memo.name}-${memo.updateTime}`} memo={memo} showCreator showVisibility compact />}
+              listSort={(memos: Memo[]) =>
+                memos
+                  .filter((memo) => memo.state === State.NORMAL)
+                  .sort((a, b) =>
+                    memoFilterStore.orderByTimeAsc
+                      ? dayjs(a.displayTime).unix() - dayjs(b.displayTime).unix()
+                      : dayjs(b.displayTime).unix() - dayjs(a.displayTime).unix(),
+                  )
+              }
+              filter={memoListFilter}
+            />
+          </div>
         </div>
-      )}
-      {!loadingState.isLoading && (
-        <main className="relative w-full h-auto flex flex-col justify-start items-start">
-          <MemoFilter />
-          {sortedMemos.map((memo) => {
-            return <Memo key={`${memo.id}-${memo.displayTs}`} memo={memo} showCreator />;
-          })}
-          {isComplete ? (
-            memos.length === 0 && (
-              <div className="w-full mt-16 mb-8 flex flex-col justify-center items-center italic">
-                <Empty />
-                <p className="mt-4 text-gray-600 dark:text-gray-400">{t("message.no-data")}</p>
-              </div>
-            )
-          ) : (
-            <p className="m-auto text-center mt-4 italic cursor-pointer text-gray-500 hover:text-green-600" onClick={handleFetchMoreClick}>
-              {t("memo.fetch-more")}
-            </p>
-          )}
-        </main>
-      )}
+        {md && (
+          <div className="sticky top-0 left-0 shrink-0 -mt-6 w-56 h-full">
+            <ExploreSidebar className="py-6" />
+          </div>
+        )}
+      </div>
     </section>
   );
 };

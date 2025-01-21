@@ -1,45 +1,93 @@
-import { useEffect } from "react";
-import { toast } from "react-hot-toast";
-import { useTranslate } from "@/utils/i18n";
-import { useGlobalStore, useUserStore } from "@/store/module";
+import clsx from "clsx";
+import dayjs from "dayjs";
+import { useMemo } from "react";
+import { HomeSidebar, HomeSidebarDrawer } from "@/components/HomeSidebar";
 import MemoEditor from "@/components/MemoEditor";
-import MemoFilter from "@/components/MemoFilter";
-import MemoList from "@/components/MemoList";
+import MemoFilters from "@/components/MemoFilters";
+import MemoView from "@/components/MemoView";
 import MobileHeader from "@/components/MobileHeader";
-import HomeSidebar from "@/components/HomeSidebar";
+import PagedMemoList from "@/components/PagedMemoList";
+import useCurrentUser from "@/hooks/useCurrentUser";
+import useResponsiveWidth from "@/hooks/useResponsiveWidth";
+import { useMemoFilterStore } from "@/store/v1";
+import { State } from "@/types/proto/api/v1/common";
+import { Memo } from "@/types/proto/api/v1/memo_service";
 
 const Home = () => {
-  const t = useTranslate();
-  const globalStore = useGlobalStore();
-  const userStore = useUserStore();
-  const user = userStore.state.user;
+  const { md } = useResponsiveWidth();
+  const user = useCurrentUser();
+  const memoFilterStore = useMemoFilterStore();
 
-  useEffect(() => {
-    const currentUsername = userStore.getCurrentUsername();
-    userStore.getUserByUsername(currentUsername).catch((error) => {
-      console.error(error);
-      toast.error(t("message.user-not-found"));
-    });
-  }, [userStore.getCurrentUsername()]);
-
-  useEffect(() => {
-    if (user?.setting.locale) {
-      globalStore.setLocale(user.setting.locale);
+  const memoListFilter = useMemo(() => {
+    const filters = [`creator == "${user.name}"`, `state == "NORMAL"`, `order_by_pinned == true`];
+    const contentSearch: string[] = [];
+    const tagSearch: string[] = [];
+    for (const filter of memoFilterStore.filters) {
+      if (filter.factor === "contentSearch") {
+        contentSearch.push(`"${filter.value}"`);
+      } else if (filter.factor === "tagSearch") {
+        tagSearch.push(`"${filter.value}"`);
+      } else if (filter.factor === "property.hasLink") {
+        filters.push(`has_link == true`);
+      } else if (filter.factor === "property.hasTaskList") {
+        filters.push(`has_task_list == true`);
+      } else if (filter.factor === "property.hasCode") {
+        filters.push(`has_code == true`);
+      } else if (filter.factor === "displayTime") {
+        const filterDate = new Date(filter.value);
+        const filterUtcTimestamp = filterDate.getTime() + filterDate.getTimezoneOffset() * 60 * 1000;
+        const timestampAfter = filterUtcTimestamp / 1000;
+        filters.push(`display_time_after == ${timestampAfter}`);
+        filters.push(`display_time_before == ${timestampAfter + 60 * 60 * 24}`);
+      }
     }
-  }, [user?.setting.locale]);
+    if (memoFilterStore.orderByTimeAsc) {
+      filters.push(`order_by_time_asc == true`);
+    }
+    if (contentSearch.length > 0) {
+      filters.push(`content_search == [${contentSearch.join(", ")}]`);
+    }
+    if (tagSearch.length > 0) {
+      filters.push(`tag_search == [${tagSearch.join(", ")}]`);
+    }
+    return filters.join(" && ");
+  }, [user, memoFilterStore.filters, memoFilterStore.orderByTimeAsc]);
 
   return (
-    <div className="w-full flex flex-row justify-start items-start">
-      <div className="flex-grow shrink w-auto px-4 sm:px-2 sm:pt-4">
-        <MobileHeader />
-        <div className="w-full h-auto flex flex-col justify-start items-start bg-zinc-100 dark:bg-zinc-800 rounded-lg">
-          {!userStore.isVisitorMode() && <MemoEditor className="mb-2" />}
-          <MemoFilter />
+    <section className="@container w-full max-w-5xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
+      {!md && (
+        <MobileHeader>
+          <HomeSidebarDrawer />
+        </MobileHeader>
+      )}
+      <div className={clsx("w-full flex flex-row justify-start items-start px-4 sm:px-6 gap-4")}>
+        <div className={clsx(md ? "w-[calc(100%-15rem)]" : "w-full")}>
+          <MemoEditor className="mb-2" cacheKey="home-memo-editor" />
+          <MemoFilters />
+          <div className="flex flex-col justify-start items-start w-full max-w-full">
+            <PagedMemoList
+              renderer={(memo: Memo) => <MemoView key={`${memo.name}-${memo.displayTime}`} memo={memo} showVisibility showPinned compact />}
+              listSort={(memos: Memo[]) =>
+                memos
+                  .filter((memo) => memo.state === State.NORMAL)
+                  .sort((a, b) =>
+                    memoFilterStore.orderByTimeAsc
+                      ? dayjs(a.displayTime).unix() - dayjs(b.displayTime).unix()
+                      : dayjs(b.displayTime).unix() - dayjs(a.displayTime).unix(),
+                  )
+                  .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+              }
+              filter={memoListFilter}
+            />
+          </div>
         </div>
-        <MemoList />
+        {md && (
+          <div className="sticky top-0 left-0 shrink-0 -mt-6 w-56 h-full">
+            <HomeSidebar className="py-6" />
+          </div>
+        )}
       </div>
-      <HomeSidebar />
-    </div>
+    </section>
   );
 };
 

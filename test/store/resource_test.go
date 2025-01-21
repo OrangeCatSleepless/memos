@@ -4,7 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/lithammer/shortuuid/v4"
 	"github.com/stretchr/testify/require"
+
 	"github.com/usememos/memos/store"
 )
 
@@ -12,36 +14,37 @@ func TestResourceStore(t *testing.T) {
 	ctx := context.Background()
 	ts := NewTestingStore(ctx, t)
 	_, err := ts.CreateResource(ctx, &store.Resource{
-		CreatorID:    101,
-		Filename:     "test.epub",
-		Blob:         []byte("test"),
-		InternalPath: "",
-		ExternalLink: "",
-		Type:         "application/epub+zip",
-		Size:         637607,
+		UID:       shortuuid.New(),
+		CreatorID: 101,
+		Filename:  "test.epub",
+		Blob:      []byte("test"),
+		Type:      "application/epub+zip",
+		Size:      637607,
 	})
 	require.NoError(t, err)
 
 	correctFilename := "test.epub"
 	incorrectFilename := "test.png"
-	res, err := ts.GetResource(ctx, &store.FindResource{
+	resource, err := ts.GetResource(ctx, &store.FindResource{
 		Filename: &correctFilename,
 	})
 	require.NoError(t, err)
-	require.Equal(t, correctFilename, res.Filename)
-	require.Equal(t, 1, res.ID)
+	require.Equal(t, correctFilename, resource.Filename)
+	require.Equal(t, int32(1), resource.ID)
+
 	notFoundResource, err := ts.GetResource(ctx, &store.FindResource{
 		Filename: &incorrectFilename,
 	})
 	require.NoError(t, err)
 	require.Nil(t, notFoundResource)
 
-	correctCreatorID := 101
-	incorrectCreatorID := 102
+	var correctCreatorID int32 = 101
+	var incorrectCreatorID int32 = 102
 	_, err = ts.GetResource(ctx, &store.FindResource{
 		CreatorID: &correctCreatorID,
 	})
 	require.NoError(t, err)
+
 	notFoundResource, err = ts.GetResource(ctx, &store.FindResource{
 		CreatorID: &incorrectCreatorID,
 	})
@@ -56,4 +59,5 @@ func TestResourceStore(t *testing.T) {
 		ID: 2,
 	})
 	require.NoError(t, err)
+	ts.Close()
 }

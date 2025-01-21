@@ -1,87 +1,45 @@
-name: build-artifacts
+name: Build artifacts
 
 on:
   push:
-    branches:
-      # Run on pushing branches like `release/1.0.0`
-      - "release/*.*.*"
+    tags:
+      - "*"
+
+permissions:
+  contents: write
 
 jobs:
-  build-artifacts:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        goarch: [amd64, arm64]
-        include:
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-            cgo_env: CC=x86_64-w64-mingw32-gcc
-
-    env:
-      GOOS: ${{ matrix.goos }}
-      GOARCH: ${{ matrix.goarch }}
-      CGO_ENABLED: 1
-
+  goreleaser:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v2
-
-      - name: Clone Memos
-        run: git clone https://github.com/usememos/memos.git
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v2
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          node-version: "18"
-
-      - name: Build frontend (Windows)
-        if: matrix.os == 'windows-latest'
-        shell: pwsh
-        run: |
-          cd memos/web
-          npm install -g pnpm
-          pnpm i --frozen-lockfile
-          pnpm build
-          Remove-Item -Path ../server/dist -Recurse -Force
-          mv dist ../server/
-
-      - name: Build frontend (non-Windows)
-        if: matrix.os != 'windows-latest'
-        run: |
-          cd memos/web
-          npm install -g pnpm
-          pnpm i --frozen-lockfile
-          pnpm build
-          rm -rf ../server/dist
-          mv dist ../server/
-
-      - name: Setup Go
-        uses: actions/setup-go@v3
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
         with:
-          go-version: 1.19
-
-      - name: Install mingw-w64 (Windows)
-        if: matrix.os == 'windows-latest'
-        run: |
-          choco install mingw
-          echo ${{ matrix.cgo_env }} >> $GITHUB_ENV
-
-      - name: Install gcc-aarch64-linux-gnu (Ubuntu ARM64)
-        if: matrix.os == 'ubuntu-latest' && matrix.goarch == 'arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          echo "CC=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-
-      - name: Build backend
-        run: |
-          cd memos
-          go build -o memos-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.os == 'windows-latest' && '.exe' || '' }} ./main.go
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v2
+          go-version: 1.23
+          check-latest: true
+          cache: true
+      - uses: pnpm/action-setup@v4.0.0
         with:
-          name: memos-binary-${{ matrix.os }}-${{ matrix.goarch }}
-          path: memos/memos-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: "web/pnpm-lock.yaml"
+      - run: pnpm install
+        working-directory: web
+      - run: pnpm release
+        working-directory: web
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          # either 'goreleaser' (default) or 'goreleaser-pro'
+          distribution: goreleaser
+          # 'latest', 'nightly', or a semver
+          version: latest
+          args: release --clean --skip=validate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
