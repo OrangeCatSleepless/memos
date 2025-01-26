@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/usememos/memos/store"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/usememos/memos/store"
 )
 
 func TestUserStore(t *testing.T) {
@@ -34,15 +35,16 @@ func TestUserStore(t *testing.T) {
 	users, err = ts.ListUsers(ctx, &store.FindUser{})
 	require.NoError(t, err)
 	require.Equal(t, 0, len(users))
+	ts.Close()
 }
 
 func createTestingHostUser(ctx context.Context, ts *store.Store) (*store.User, error) {
 	userCreate := &store.User{
-		Username: "test",
-		Role:     store.RoleHost,
-		Email:    "test@test.com",
-		Nickname: "test_nickname",
-		OpenID:   "test_open_id",
+		Username:    "test",
+		Role:        store.RoleHost,
+		Email:       "test@test.com",
+		Nickname:    "test_nickname",
+		Description: "test_description",
 	}
 	passwordHash, err := bcrypt.GenerateFromPassword([]byte("test_password"), bcrypt.DefaultCost)
 	if err != nil {

@@ -1,65 +1,74 @@
-import { useEffect, useState } from "react";
-import { useTranslate } from "@/utils/i18n";
-import toast from "react-hot-toast";
-import { useFilterStore, useMemoStore } from "@/store/module";
-import useLoading from "@/hooks/useLoading";
-import ArchivedMemo from "@/components/ArchivedMemo";
+import dayjs from "dayjs";
+import { ArchiveIcon } from "lucide-react";
+import { useMemo } from "react";
+import MemoFilters from "@/components/MemoFilters";
+import MemoView from "@/components/MemoView";
 import MobileHeader from "@/components/MobileHeader";
-import Empty from "@/components/Empty";
+import PagedMemoList from "@/components/PagedMemoList";
 import SearchBar from "@/components/SearchBar";
-import MemoFilter from "@/components/MemoFilter";
-import "@/less/archived.less";
+import useCurrentUser from "@/hooks/useCurrentUser";
+import { useMemoFilterStore } from "@/store/v1";
+import { State } from "@/types/proto/api/v1/common";
+import { Memo } from "@/types/proto/api/v1/memo_service";
+import { useTranslate } from "@/utils/i18n";
 
 const Archived = () => {
   const t = useTranslate();
-  const memoStore = useMemoStore();
-  const loadingState = useLoading();
-  const [archivedMemos, setArchivedMemos] = useState<Memo[]>([]);
-  const memos = memoStore.state.memos;
-  const filterStore = useFilterStore();
-  const filter = filterStore.state;
-  const { text: textQuery } = filter;
+  const user = useCurrentUser();
+  const memoFilterStore = useMemoFilterStore();
 
-  useEffect(() => {
-    memoStore
-      .fetchArchivedMemos()
-      .then((result) => {
-        const filteredMemos = textQuery ? result.filter((memo) => memo.content.toLowerCase().includes(textQuery.toLowerCase())) : result;
-        setArchivedMemos(filteredMemos);
-      })
-      .catch((error) => {
-        console.error(error);
-        toast.error(error.response.data.message);
-      })
-      .finally(() => {
-        loadingState.setFinish();
-      });
-  }, [memos, textQuery]);
+  const memoListFilter = useMemo(() => {
+    const filters = [`creator == "${user.name}"`, `state == "ARCHIVED"`];
+    const contentSearch: string[] = [];
+    const tagSearch: string[] = [];
+    for (const filter of memoFilterStore.filters) {
+      if (filter.factor === "contentSearch") {
+        contentSearch.push(`"${filter.value}"`);
+      } else if (filter.factor === "tagSearch") {
+        tagSearch.push(`"${filter.value}"`);
+      }
+    }
+    if (memoFilterStore.orderByTimeAsc) {
+      filters.push(`order_by_time_asc == true`);
+    }
+    if (contentSearch.length > 0) {
+      filters.push(`content_search == [${contentSearch.join(", ")}]`);
+    }
+    if (tagSearch.length > 0) {
+      filters.push(`tag_search == [${tagSearch.join(", ")}]`);
+    }
+    return filters.join(" && ");
+  }, [user, memoFilterStore.filters]);
 
   return (
-    <section className="w-full min-h-full flex flex-col md:flex-row justify-start items-start px-4 sm:px-2 sm:pt-4 pb-8 bg-zinc-100 dark:bg-zinc-800">
-      <MobileHeader showSearch={false} />
-      <div className="archived-memo-page">
-        <div className="mb-2 mt-2 w-full">
-          <SearchBar />
+    <section className="@container w-full max-w-5xl min-h-full flex flex-col justify-start items-center sm:pt-3 md:pt-6 pb-8">
+      <MobileHeader />
+      <div className="w-full px-4 sm:px-6">
+        <div className="w-full flex flex-col justify-start items-start">
+          <div className="w-full flex flex-row justify-between items-center mb-2">
+            <div className="flex flex-row justify-start items-center gap-1">
+              <ArchiveIcon className="w-5 h-auto opacity-70 shrink-0" />
+              <span>{t("common.archived")}</span>
+            </div>
+            <div className="w-44">
+              <SearchBar />
+            </div>
+          </div>
+          <MemoFilters />
+          <PagedMemoList
+            renderer={(memo: Memo) => <MemoView key={`${memo.name}-${memo.updateTime}`} memo={memo} showVisibility compact />}
+            listSort={(memos: Memo[]) =>
+              memos
+                .filter((memo) => memo.state === State.ARCHIVED)
+                .sort((a, b) =>
+                  memoFilterStore.orderByTimeAsc
+                    ? dayjs(a.displayTime).unix() - dayjs(b.displayTime).unix()
+                    : dayjs(b.displayTime).unix() - dayjs(a.displayTime).unix(),
+                )
+            }
+            filter={memoListFilter}
+          />
         </div>
-        <MemoFilter />
-        {loadingState.isLoading ? (
-          <div className="tip-text-container">
-            <p className="tip-text">{t("memo.fetching-data")}</p>
-          </div>
-        ) : archivedMemos.length === 0 ? (
-          <div className="w-full mt-16 mb-8 flex flex-col justify-center items-center italic">
-            <Empty />
-            <p className="mt-4 text-gray-600 dark:text-gray-400">{t("message.no-data")}</p>
-          </div>
-        ) : (
-          <div className="archived-memos-container">
-            {archivedMemos.map((memo) => (
-              <ArchivedMemo key={`${memo.id}-${memo.updatedTs}`} memo={memo} />
-            ))}
-          </div>
-        )}
       </div>
     </section>
   );
